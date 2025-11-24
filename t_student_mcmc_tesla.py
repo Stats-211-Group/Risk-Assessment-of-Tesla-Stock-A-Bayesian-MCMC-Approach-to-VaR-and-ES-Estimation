@@ -1,5 +1,30 @@
+import os
+import pandas as pd
 import numpy as np
 from scipy import stats
+
+# ===================================================================
+# 1) 全局配置
+# ===================================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "Tesla_close.csv")  # 数据文件路径
+RETURNS_ARE_PERCENT = False        # CSV 中的收益率是否已经是百分比形式
+
+OUT_DIR = os.path.join(BASE_DIR, "outputs")
+if not os.path.exists(OUT_DIR):
+    os.makedirs(OUT_DIR)
+
+N_ITER    = 20000  # MCMC 总迭代次数
+BURN_FRAC = 0.5    # Burn-in 比例
+
+# MH 步长 (需要根据接受率进行调整)
+STEP_MU   = 0.04
+STEP_LOGS = 0.05
+STEP_ETA  = 0.05
+
+SEED = 42 # 随机种子，保证结果可复现
+
+# ===================================================================
 
 # ============ 工具函数 ============
 
@@ -7,6 +32,17 @@ def mad_robust(x):
     """稳健尺度：1.4826 * MAD"""
     med = np.median(x)
     return 1.4826 * np.median(np.abs(x - med))
+
+def load_returns(csv_path, returns_are_percent=True):
+    """从 CSV 加载收益率数据。"""
+    df = pd.read_csv(csv_path)
+    # 假设收益率数据在名为 'Log_Return' 的列中
+    if 'Log_Return' not in df.columns:
+        raise ValueError("Column 'Log_Return' not found in CSV file.")
+    r = df['Log_Return'].dropna().values
+    if not returns_are_percent:
+        r = r * 100.0
+    return r
 
 # ---------- 先验 ----------
 def logprior(theta, tau_mu, c_sigma, mean_nu_star):
@@ -149,58 +185,81 @@ def mwg_sampler(r,
 
 
 # --------------------------
-# 5) 便捷图表函数
+# 5) 便捷图表函数 (美化版)
 # --------------------------
+import matplotlib.pyplot as plt
+
 def plot_hist(x, title, xlabel, outpath):
-    fig = plt.figure()
-    ax  = fig.add_subplot(111)
-    ax.hist(x, bins=50, density=True)
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Density")
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=144)
-    plt.close(fig)
+    """Beautified histogram with an overlaid KDE curve."""
+    with plt.style.context('seaborn-v0_8-darkgrid'):
+        fig = plt.figure(figsize=(10, 6))
+        ax  = fig.add_subplot(111)
+        # 绘制直方图
+        ax.hist(x, bins=50, density=True, alpha=0.7, label="Posterior samples histogram")
+        # 叠加 KDE 曲线
+        kde = stats.gaussian_kde(x)
+        x_range = np.linspace(x.min(), x.max(), 200)
+        ax.plot(x_range, kde(x_range), color='firebrick', linewidth=2, label="KDE estimate")
+        ax.set_title(title, fontsize=16, weight='bold')
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel("Density", fontsize=12)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(outpath, dpi=144)
+        plt.close(fig)
 
 def plot_trace(x, title, ylabel, outpath):
-    fig = plt.figure()
-    ax  = fig.add_subplot(111)
-    ax.plot(x)
-    ax.set_title(title)
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel(ylabel)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=144)
-    plt.close(fig)
+    """Beautified MCMC trace plot with its mean highlighted."""
+    with plt.style.context('seaborn-v0_8-darkgrid'):
+        fig = plt.figure(figsize=(12, 6))
+        ax  = fig.add_subplot(111)
+        ax.plot(x, alpha=0.8, label="MCMC trace")
+        # 绘制均值线
+        mean_val = np.mean(x)
+        ax.axhline(mean_val, color='firebrick', linestyle='--', linewidth=2, label=f"Mean: {mean_val:.3f}")
+        ax.set_title(title, fontsize=16, weight='bold')
+        ax.set_xlabel("Iteration", fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(outpath, dpi=144)
+        plt.close(fig)
 
 def quick_fit_plots(r, mu_hat, sig_hat, nu_hat, out_prefix):
-    # 直方图 + 拟合 t 密度
-    fig1 = plt.figure()
-    ax1  = fig1.add_subplot(111)
-    ax1.hist(r, bins=50, density=True, alpha=0.6)
-    xs = np.linspace(np.min(r), np.max(r), 400)
-    ys = stats.t.pdf(xs, df=nu_hat, loc=mu_hat, scale=sig_hat)
-    ax1.plot(xs, ys)
-    ax1.set_title("Returns histogram with fitted t density")
-    fig1.tight_layout()
-    fig1.savefig(out_prefix + "_hist.png", dpi=144)
-    plt.close(fig1)
+    """Produce quick-fit visuals: histogram + fitted t density and QQ-plot."""
+    with plt.style.context('seaborn-v0_8-darkgrid'):
+        # 1. 直方图 + 拟合 t 密度
+        fig1 = plt.figure(figsize=(10, 6))
+        ax1  = fig1.add_subplot(111)
+        ax1.hist(r, bins=50, density=True, alpha=0.7, label="Return histogram")
+        xs = np.linspace(np.min(r), np.max(r), 400)
+        ys = stats.t.pdf(xs, df=nu_hat, loc=mu_hat, scale=sig_hat)
+        ax1.plot(xs, ys, color='firebrick', linewidth=2, label=f"Fitted t density (ν={nu_hat:.2f})")
+        ax1.set_title("Return histogram with fitted t density", fontsize=16, weight='bold')
+        ax1.set_xlabel("Daily return (%)", fontsize=12)
+        ax1.set_ylabel("Density", fontsize=12)
+        ax1.legend()
+        fig1.tight_layout()
+        fig1.savefig(out_prefix + "_hist.png", dpi=144)
+        plt.close(fig1)
 
-    # QQ-plot（经验分位数 vs 拟合 t 分位数）
-    fig2 = plt.figure()
-    ax2  = fig2.add_subplot(111)
-    percs = np.linspace(0.01, 0.99, 99)
-    q_emp = np.quantile(r, percs)
-    q_the = stats.t.ppf(percs, df=nu_hat, loc=mu_hat, scale=sig_hat)
-    ax2.scatter(q_the, q_emp, s=10)
-    lo = min(q_the.min(), q_emp.min())
-    hi = max(q_the.max(), q_emp.max())
-    ax2.plot([lo, hi], [lo, hi])
-    ax2.set_title("QQ-plot: empirical vs fitted t")
-    fig2.tight_layout()
-    fig2.savefig(out_prefix + "_qq.png", dpi=144)
-    plt.close(fig2)
-    
+        # 2. QQ-plot (empirical quantiles vs fitted t quantiles)
+        fig2 = plt.figure(figsize=(8, 8))
+        ax2  = fig2.add_subplot(111)
+        # 使用 stats.probplot 可以更方便地生成 QQ 图
+        stats.probplot(r, dist=stats.t, sparams=(nu_hat, mu_hat, sig_hat), plot=ax2)
+        # 美化 probplot 的输出
+        ax2.get_lines()[0].set_markerfacecolor('deepskyblue')
+        ax2.get_lines()[0].set_markeredgecolor('deepskyblue')
+        ax2.get_lines()[0].set_alpha(0.6)
+        ax2.get_lines()[1].set_color('firebrick')
+        ax2.set_title("QQ plot: empirical vs fitted t quantiles", fontsize=16, weight='bold')
+        ax2.set_xlabel("Theoretical quantiles", fontsize=12)
+        ax2.set_ylabel("Sample quantiles", fontsize=12)
+        fig2.tight_layout()
+        fig2.savefig(out_prefix + "_qq.png", dpi=144)
+        plt.close(fig2)
+
 def acf_1d(x, max_lag=100):
     """
     计算样本自相关函数 ρ(k)，k=0..max_lag。
@@ -211,31 +270,36 @@ def acf_1d(x, max_lag=100):
     n = len(x)
     if n < 2:
         return np.array([1.0])
-    # 快速相关：full，再截取非负滞后部分
     ac_full = np.correlate(x, x, mode='full')
-    ac = ac_full[n-1:n+max_lag]  # k=0..max_lag 的协方差（未除以 n）
-    # 用 k=0 项做标准化，得到自相关 ρ(k)
+    ac = ac_full[n-1:n+max_lag]
     denom = ac[0]
     if denom <= 0:
         return np.zeros_like(ac)
     acf = ac / denom
-    # 无偏近似（可选）：除以 (n-k)，但做相关时影响很小；这里省略
     return acf
 
 def plot_acf_series(x, title, outpath, max_lag=100):
     """
-    画 ACF 柱状图（k=0..max_lag）。lag=0 处为 1。
+    Beautified ACF plot with an added confidence band.
     """
+    n = len(x)
     rho = acf_1d(x, max_lag=max_lag)
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.bar(range(len(rho)), rho, width=1.0)
-    ax.set_title(f"ACF: {title}")
-    ax.set_xlabel("Lag k")
-    ax.set_ylabel("Autocorrelation ρ(k)")
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=144)
-    plt.close(fig)
+    with plt.style.context('seaborn-v0_8-darkgrid'):
+        fig = plt.figure(figsize=(12, 6))
+        ax = fig.add_subplot(111)
+        lags = np.arange(len(rho))
+        # 绘制置信区间 (95%, 1.96/sqrt(n))
+        conf_level = 1.96 / np.sqrt(n)
+        ax.fill_between(lags, -conf_level, conf_level, color='lightblue', alpha=0.5, label="95% confidence band")
+        # 绘制 ACF 棒棒糖图
+        ax.stem(lags, rho, linefmt='gray', markerfmt='o', basefmt=' ')
+        ax.set_title(f"Autocorrelation (ACF): {title}", fontsize=16, weight='bold')
+        ax.set_xlabel("Lag k", fontsize=12)
+        ax.set_ylabel("Autocorrelation ρ(k)", fontsize=12)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(outpath, dpi=144)
+        plt.close(fig)
 
 def ess_from_acf(x, max_lag=200):
     """
@@ -260,30 +324,40 @@ def ess_from_acf(x, max_lag=200):
 # 6) 主流程
 # --------------------------
 def main():
+    """主流程：加载数据 -> 运行采样器 -> 分析和绘图"""
     # 读收益（单位：百分比）
     r = load_returns(CSV_PATH, returns_are_percent=RETURNS_ARE_PERCENT)
 
-    # 用稳健尺度设先验超参（弱信息、与数据量级对齐）
-    s_rob = mad_robust(r)
-    tau_mu = float(min(0.50, 0.25 * s_rob))   # mu ~ N(0, tau_mu^2)
-    c_sigma = float(2.0 * s_rob)              # sigma ~ Half-Cauchy(0, c_sigma)
-    mean_nu_star = 30.0                       # (nu-2) ~ Exp(mean=30)
+    # (动态设定先验超参数)
+    s_robust = mad_robust(r)
+    hyper_params = {
+        "tau_mu":       s_robust,      # mu 的先验标准差，与数据尺度相关
+        "c_sigma":      s_robust,      # sigma 的先验尺度
+        "mean_nu_star": 30.0           # nu-2 的先验均值（无信息）
+    }
 
-    # 采样
-    post, acc_rate, chain = mh_sampler(
-        r,
-        n_iter=N_ITER,
-        burn_frac=BURN_FRAC,
-        step_mu=STEP_MU,
-        step_logsig=STEP_LOGS,
-        step_eta=STEP_ETA,
-        tau_mu=tau_mu,
-        c_sigma=c_sigma,
-        mean_nu_star=mean_nu_star,
-        init=None,
-        random_seed=SEED
-    )
+    # 运行采样器
+    post, acc_rate, chain = mwg_sampler(r,
+                                        n_iter=N_ITER,
+                                        burn_frac=BURN_FRAC,
+                                        step_mu=STEP_MU,
+                                        step_logsig=STEP_LOGS,
+                                        step_eta=STEP_ETA,
+                                        random_seed=SEED,
+                                        **hyper_params)
 
+    # 分析并出图
+    analyze_and_plot_results(r=r,
+                             post=post,
+                             chain=chain,
+                             acc_rate=acc_rate,
+                             sampler_name="Metropolis-within-Gibbs",
+                             hyper_params=hyper_params)
+
+def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_params):
+    """
+    对 MCMC 采样结果进行后处理、分析、绘图和保存。
+    """
     # 后验样本 → 真实参数
     mu_samps    = post[:, 0]
     sigma_samps = np.exp(post[:, 1])
@@ -298,7 +372,7 @@ def main():
     quick_fit_plots(r, mu_med, sig_med, nu_med,
                     out_prefix=os.path.join(OUT_DIR, "t_fit"))
 
-    # ---- 生成 posterior 直方图（μ、σ、ν） ----
+    # ---- 生成后验分布直方图（μ、σ、ν） ----
     plot_hist(mu_samps,    "Posterior of μ", "mu (%)",
               os.path.join(OUT_DIR, "post_mu_hist.png"))
     plot_hist(sigma_samps, "Posterior of σ", "sigma (%)",
@@ -306,49 +380,61 @@ def main():
     plot_hist(nu_samps,    "Posterior of ν", "nu (df)",
               os.path.join(OUT_DIR, "post_nu_hist.png"))
 
-    # ---- 生成 trace 图（μ、σ、ν） ----
-    plot_trace(mu_samps,    "Trace: μ", "mu (%)",
+    # ---- 生成轨迹图（μ、σ、ν），使用完整 chain ----
+    plot_trace(chain[:, 0], "Trace: μ", "mu (%)",
                os.path.join(OUT_DIR, "trace_mu.png"))
-    plot_trace(sigma_samps, "Trace: σ", "sigma (%)",
+    plot_trace(np.exp(chain[:, 1]), "Trace: σ", "sigma (%)",
                os.path.join(OUT_DIR, "trace_sigma.png"))
-    plot_trace(nu_samps,    "Trace: ν", "nu (df)",
+    plot_trace(2.0 + np.exp(chain[:, 2]), "Trace: ν", "nu (df)",
                os.path.join(OUT_DIR, "trace_nu.png"))
     
-    # ACF 图：分别对 μ、σ、ν 画
+    # ---- ACF 图：分别对 μ、σ、ν 画 ----
     plot_acf_series(mu_samps,    "μ chain", os.path.join(OUT_DIR, "acf_mu.png"),    max_lag=100)
     plot_acf_series(sigma_samps, "σ chain", os.path.join(OUT_DIR, "acf_sigma.png"), max_lag=100)
     plot_acf_series(nu_samps,    "ν chain", os.path.join(OUT_DIR, "acf_nu.png"),    max_lag=100)
-    print("\n=== ESS (ACF-based, per chain) ===")
-    print("ESS(mu)   :", int(ess_from_acf(mu_samps,    max_lag=200)))
-    print("ESS(sigma):", int(ess_from_acf(sigma_samps, max_lag=200)))
-    print("ESS(nu)   :", int(ess_from_acf(nu_samps,    max_lag=200)))
-
 
     # 汇总表
-    summ = pd.DataFrame({
-        "param":  ["mu(%)","sigma(%)","nu"],
-        "median": [mu_med, sig_med, nu_med],
-        "p2.5":   [np.percentile(mu_samps, 2.5),
-                   np.percentile(sigma_samps, 2.5),
-                   np.percentile(nu_samps, 2.5)],
-        "p97.5":  [np.percentile(mu_samps, 97.5),
-                   np.percentile(sigma_samps, 97.5),
-                   np.percentile(nu_samps, 97.5)]
-    })
-    summ_path = os.path.join(OUT_DIR, "posterior_summary.csv")
-    summ.to_csv(summ_path, index=False)
+    ess_vals = [
+        ess_from_acf(mu_samps),
+        ess_from_acf(sigma_samps),
+        ess_from_acf(nu_samps),
+    ]
 
-    # 控制台打印关键信息
-    print("=== Data ===")
-    print(f"CSV: {CSV_PATH}")
-    print("\n=== Prior hyper-parameters (data-adaptive) ===")
-    print(f"tau_mu = {tau_mu:.4f} (%),  c_sigma = {c_sigma:.4f} (%),  mean_nu_star = {mean_nu_star:.1f}")
-    print("\n=== Acceptance rates (mu, log_sigma, eta) ===")
-    print(acc_rate)
-    print("\n=== Posterior summaries (median [2.5%, 97.5%]) ===")
-    for name, arr in zip(["mu(%)","sigma(%)","nu"], [mu_samps, sigma_samps, nu_samps]):
-        print(f"{name:8s}: {np.median(arr):.4f}  [{np.percentile(arr,2.5):.4f}, {np.percentile(arr,97.5):.4f}]")
-    print("\nSaved to:", OUT_DIR)
+    summary = pd.DataFrame({
+        "param": ["mu(%)", "sigma(%)", "nu"],
+        "median": [mu_med, sig_med, nu_med],
+        "mean": [np.mean(mu_samps), np.mean(sigma_samps), np.mean(nu_samps)],
+        "sd": [np.std(mu_samps, ddof=1),
+                np.std(sigma_samps, ddof=1),
+                np.std(nu_samps, ddof=1)],
+        "p2.5": [np.percentile(mu_samps, 2.5),
+                  np.percentile(sigma_samps, 2.5),
+                  np.percentile(nu_samps, 2.5)],
+        "p97.5": [np.percentile(mu_samps, 97.5),
+                   np.percentile(sigma_samps, 97.5),
+                   np.percentile(nu_samps, 97.5)],
+        "ess": ess_vals,
+    })
+
+    summary_path = os.path.join(OUT_DIR, "posterior_summary.csv")
+    summary.to_csv(summary_path, index=False)
+
+    acc_df = pd.DataFrame({
+        "parameter": ["mu", "log_sigma", "eta"],
+        "accept_rate": acc_rate,
+    })
+    acc_df.to_csv(os.path.join(OUT_DIR, "acceptance_rates.csv"), index=False)
+
+    diagnostics_txt = os.path.join(OUT_DIR, "diagnostics.txt")
+    with open(diagnostics_txt, "w", encoding="utf-8") as fh:
+        fh.write(f"Sampler: {sampler_name}\n")
+        fh.write(f"Iterations: {len(chain)}, burn-in fraction: {BURN_FRAC}\n")
+        fh.write("Acceptance rates (mu, log_sigma, eta): " + ", ".join(f"{x:.3f}" for x in acc_rate) + "\n")
+        fh.write("ESS (mu, sigma, nu): " + ", ".join(f"{x:.1f}" for x in ess_vals) + "\n")
+        fh.write(f"Summary CSV: {summary_path}\n")
+
+    print("Posterior summaries and diagnostics saved to the outputs/ folder.")
+
 
 if __name__ == "__main__":
     main()
