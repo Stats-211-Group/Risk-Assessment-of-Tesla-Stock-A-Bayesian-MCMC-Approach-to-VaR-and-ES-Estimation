@@ -8,7 +8,7 @@ def mad_robust(x):
     med = np.median(x)
     return 1.4826 * np.median(np.abs(x - med))
 
-# ---------- 先验 ----------
+# ---------- 先验（与原代码一致） ----------
 def logprior(theta, tau_mu, c_sigma, mean_nu_star):
     """
     先验的对数：

@@ -1,152 +1,148 @@
+# -*- coding: utf-8 -*-
+"""
+Stat 211 Project - Student-t model for daily returns (Tesla example)
+- Reads CSV with columns: Date, Close, Log_Return
+- Uses a data-adaptive weakly-informative prior
+- Estimates posterior of (mu, sigma, nu) via random-walk Metropolis-Hastings
+- Produces: posterior summaries, VaR/ES (plug-in), hist & QQ, and posterior hist/trace for mu/sigma/nu
+
+Author: your team
+"""
+
+import os
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 from scipy import stats
 
-# ============ 工具函数 ============
+# --------------------------
+# 0) 路径与配置（按你的机器改这里）
+# --------------------------
+CSV_PATH = r"D:\A_Python_Project\Stat 211 Project\Tesla_close.csv"
+OUT_DIR  = r"D:\A_Python_Project\Stat 211 Project\outputs"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+RETURNS_ARE_PERCENT = False
+
+# 采样设置（可根据接受率微调步长）
+N_ITER     = 15000      # 总迭代
+BURN_FRAC  = 0.50       # 丢弃前 50%
+STEP_MU    = 0.2        # mu 的随机游走步长（单位：%，因为我们用的是百分比）
+STEP_LOGS  = 0.2        # log(sigma) 的步长
+STEP_ETA   = 0.5      # eta = log(nu-2) 的步长
+SEED       = 42
+
+# --------------------------
+# 1) 数据加载与预处理
+# --------------------------
+def load_returns(csv_path, returns_are_percent=False):
+    """读取 CSV，如果有 Log_Return 列就直接用；否则用 Close 计算。
+    返回：一维 numpy 数组 r（单位：百分比 %）
+    """
+    df = pd.read_csv(csv_path)
+    if "Log_Return" in df.columns:
+        r = df["Log_Return"].astype(float).values
+        # 若是小数收益，则 *100 变百分比
+        if not returns_are_percent:
+            r = r * 100.0
+    else:
+        # 没有 Log_Return 就用 Close 计算对数收益
+        px = df["Close"].astype(float).values
+        r = np.diff(np.log(px))
+        r = r * 100.0  # 转成百分比
+    return r
 
 def mad_robust(x):
-    """稳健尺度：1.4826 * MAD"""
+    """稳健尺度：s_robust = 1.4826 * MAD"""
     med = np.median(x)
     return 1.4826 * np.median(np.abs(x - med))
 
-# ---------- 先验 ----------
-def logprior(theta, tau_mu, c_sigma, mean_nu_star):
-    """
-    先验的对数：
-      mu ~ N(0, tau_mu^2)
-      sigma ~ Half-Cauchy(0, c_sigma)    （在真实尺度 sigma 上）
-      (nu-2) ~ Exponential(mean = mean_nu_star)
-    注意：代码在 (log_sigma, eta) 空间工作，需加 Jacobian：+log_sigma + eta
-    """
+# --------------------------
+# 2) 模型：log-likelihood（t 分布，位置-尺度参数化）
+#    参数工作变量：theta = (mu, log_sigma, eta)，其中
+#       sigma = exp(log_sigma) > 0
+#       nu    = 2 + exp(eta)   > 2  （保证方差存在）
+# --------------------------
+def loglik_t(theta, r):
     mu, log_sigma, eta = theta
-    sigma   = np.exp(log_sigma)      # sigma > 0
-    nu_star = np.exp(eta)            # nu - 2 > 0
+    sigma = np.exp(log_sigma)
+    nu    = 2.0 + np.exp(eta)
+    # 对每个 r_t 取 t 分布的 logpdf 并求和
+    return np.sum(stats.t.logpdf(r, df=nu, loc=mu, scale=sigma))
+
+# --------------------------
+# 3) 先验：弱信息、与数据尺度对齐
+#    mu ~ N(0, tau_mu^2)
+#    sigma ~ Half-Cauchy(0, c_sigma)
+#    nu-2 ~ Exponential(mean = mean_nu_star)
+#    注意：因为代码在 (log_sigma, eta) 上工作，需要加入 Jacobian：+log_sigma + eta
+# --------------------------
+def logprior(theta, tau_mu, c_sigma, mean_nu_star):
+    mu, log_sigma, eta = theta
+    sigma   = np.exp(log_sigma)
+    nu_star = np.exp(eta)  # = nu - 2
 
     # mu 的正态先验
     lp = stats.norm.logpdf(mu, 0.0, tau_mu)
 
-    # sigma 的 Half-Cauchy 先验（对数密度）
+    # sigma 的 Half-Cauchy 先验（对数形式）
     # f(sigma) = [2 / (pi * c)] * 1 / (1 + (sigma/c)^2), sigma>0
     lp += np.log(2.0) - np.log(np.pi * c_sigma) - np.log(1.0 + (sigma / c_sigma)**2)
 
-    # (nu-2) 的指数先验（均值 mean_nu_star；rate = 1/mean）
+    # (nu-2) 的指数先验（均值 mean_nu_star，对应 rate=1/mean）
     rate = 1.0 / mean_nu_star
     lp += np.log(rate) - rate * nu_star
 
-    # 变量变换的 Jacobian：sigma = exp(log_sigma) → +log_sigma；nu-2 = exp(eta) → +eta
+    # 变量变换的 Jacobian：sigma = exp(log_sigma) => +log_sigma；nu-2 = exp(eta) => +eta
     lp += log_sigma + eta
     return lp
 
-# ---------- 层级表示下的似然 ----------
-def loglik_normal_given_lambda(theta, r, lam):
-    """
-    给定隐变量 λ_t 的条件似然（对数）：
-      r_t | λ_t ~ Normal( mu,  sigma^2 / λ_t )
-    这里 theta = (mu, log_sigma, eta)，eta 只影响抽 λ 的条件式，这个似然里不直接用到 eta。
-    """
-    mu, log_sigma, _ = theta
-    sigma = np.exp(log_sigma)  # 真实尺度
-    # 对每个 t：方差 = sigma^2 / lam_t
-    var_t = (sigma ** 2) / lam
-    # 正态对数密度逐点求和（数值稳定地拆分）
-    # log N(r | mu, var_t) = -0.5*log(2π) - 0.5*log(var_t) - (r-mu)^2 / (2*var_t)
-    ll = -0.5 * np.log(2.0 * np.pi) * len(r)
-    ll += -0.5 * np.sum(np.log(var_t))
-    ll += -0.5 * np.sum(((r - mu) ** 2) / var_t)
-    return ll
+# 后验 = 似然 + 先验（差一个常数，采样时不需要）
+def logpost(theta, r, tau_mu, c_sigma, mean_nu_star):
+    return loglik_t(theta, r) + logprior(theta, tau_mu, c_sigma, mean_nu_star)
 
-def logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star):
-    """
-    层级模型下的对数后验：
-      log posterior = loglik_normal_given_lambda + logprior
-    注意：这里的似然使用了当前 λ 序列（在每轮迭代最先用 Gibbs 更新得到）
-    """
-    return loglik_normal_given_lambda(theta, r, lam) + logprior(theta, tau_mu, c_sigma, mean_nu_star)
-
-# ---------- 关键：Gibbs 抽样 λ_t ----------
-def gibbs_sample_lambda(r, mu, sigma, nu):
-    """
-    对整列 λ_{1:n} 做一次 Gibbs 更新：
-      λ_t | r_t, mu, sigma, nu ~ Gamma( (nu+1)/2,  rate = (nu + ((r_t-mu)^2 / sigma^2)) / 2 )
-    SciPy: gamma(shape=k, scale=θ) —— 其中 θ = 1/rate
-    返回：lam (shape = [n,])
-    """
-    n = len(r)
-    shape = (nu + 1.0) / 2.0
-    # rate_t = ( nu + ((r_t - mu)^2 / sigma^2) ) / 2
-    rate_t = (nu + ((r - mu) ** 2) / (sigma ** 2)) / 2.0
-    scale_t = 1.0 / rate_t  # SciPy 需要的是 scale = 1/rate
-
-    # 对每个 t 独立采样（向量化）
-    # 注意：scipy.stats.gamma 支持向量化的 scale
-    lam = stats.gamma.rvs(a=shape, scale=scale_t, size=n)
-    return lam
-
-# ============ Metropolis-within-Gibbs 采样器（最小改动版） ============
-
-def mwg_sampler(r,
-                n_iter=15000, burn_frac=0.5,
-                step_mu=0.05, step_logsig=0.05, step_eta=0.05,
-                tau_mu=0.5, c_sigma=1.5, mean_nu_star=30.0,
-                init=None, random_seed=42):
-    """
-    Metropolis-within-Gibbs（MwG）：
-      1) Gibbs：给定 (mu, sigma, nu) 对整列 λ 采样（可解析，必收）
-      2) MH：依次对 (mu, log_sigma, eta) 做随机游走提议并接受/拒绝
-    与你原来的 MH 采样器的唯一区别：每轮迭代开始，先更新 λ
-    """
+# --------------------------
+# 4) 随机游走 Metropolis-Hastings 采样器
+#    依次更新 (mu, log_sigma, eta)，每个维度做一个对称正态提议
+# --------------------------
+def mh_sampler(r,
+               n_iter=15000, burn_frac=0.5,
+               step_mu=0.05, step_logsig=0.05, step_eta=0.05,
+               tau_mu=0.5, c_sigma=1.5, mean_nu_star=30.0,
+               init=None, random_seed=42):
     rng = np.random.default_rng(random_seed)
 
-    # ------ 初始化 θ 和 λ ------
+    # 初始化：mu≈0，sigma≈s_robust，nu≈8~12
     if init is None:
         s_robust = mad_robust(r)
         mu0   = 0.0
         logs0 = np.log(max(s_robust, 1e-8))
-        eta0  = np.log(8.0 - 2.0)   # 初始 nu ≈ 8
+        eta0  = np.log(8.0 - 2.0)   # nu0 ≈ 8
         theta = np.array([mu0, logs0, eta0], dtype=float)
     else:
         theta = np.array(init, dtype=float)
 
-    # 初始 λ：用当前参数的条件式 Gibbs 一次（或全 1 也可）
-    mu, log_sigma, eta = theta
-    sigma = np.exp(log_sigma)
-    nu    = 2.0 + np.exp(eta)
-    lam   = gibbs_sample_lambda(r, mu, sigma, nu)
-
     steps   = np.array([step_mu, step_logsig, step_eta], dtype=float)
     acc     = np.zeros(3, dtype=int)
-    chain   = np.zeros((n_iter, 3), dtype=float)  # 保存 θ 的轨迹
-    lp_cur  = logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star)
+    chain   = np.zeros((n_iter, 3), dtype=float)  #二维数组（行为iter
+    lp_cur  = logpost(theta, r, tau_mu, c_sigma, mean_nu_star)
 
-    # ------ 主循环 ------
     for it in range(n_iter):
-        # (A) 先对整列 λ 做一次 Gibbs 更新（必收）
-        mu, log_sigma, eta = theta
-        sigma = np.exp(log_sigma)
-        nu    = 2.0 + np.exp(eta)
-        lam   = gibbs_sample_lambda(r, mu, sigma, nu)
-
-        # (B) 再对 θ 的三个坐标做 MH 更新（与原来相同，只是似然换成用了 lam 的 normal 似然）
         for j in range(3):
-            prop = theta.copy()
-            prop[j] += rng.normal(0.0, steps[j])  # 对称正态提议
-
-            # 计算候选点的对数后验（注意：似然使用给定 lam 的 normal 形式）
-            lp_prop = logpost_hier(prop, r, lam, tau_mu, c_sigma, mean_nu_star)
-
-            # MH 接受判据：log(u) <= logpost_prop - logpost_cur
+            prop      = theta.copy()
+            prop[j]  += rng.normal(0.0, steps[j])  # 对称提议：N(theta_j, step_j^2)
+            lp_prop   = logpost(prop, r, tau_mu, c_sigma, mean_nu_star)
+            # 接受概率 alpha = min(1, exp(lp_prop - lp_cur))
             if np.log(rng.random()) <= (lp_prop - lp_cur):
                 theta  = prop
                 lp_cur = lp_prop
                 acc[j] += 1
-
         chain[it, :] = theta
 
-    # ------ 返回后验样本与接受率 ------
     burn     = int(burn_frac * n_iter)
     post     = chain[burn:, :]
     acc_rate = acc / n_iter
     return post, acc_rate, chain
-
 
 # --------------------------
 # 5) 便捷图表函数
