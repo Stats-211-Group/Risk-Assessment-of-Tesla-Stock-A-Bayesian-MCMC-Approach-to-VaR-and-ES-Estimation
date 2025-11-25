@@ -1,5 +1,5 @@
 Sampler: Metropolis-within-Gibbs
 Iterations: 20000, burn-in fraction: 0.5
-Acceptance rates (mu, log_sigma, eta): 0.001, 0.001, 0.001
-ESS (mu, sigma, nu): 26.2, 26.0, 26.6
+Acceptance rates (mu, log_sigma, eta): 0.944, 0.767, 0.697
+ESS (mu, sigma, nu): 77.7, 119.9, 63.6
 Summary CSV: d:\A_Python_Project\Stat 211 Project\outputs\posterior_summary.csv

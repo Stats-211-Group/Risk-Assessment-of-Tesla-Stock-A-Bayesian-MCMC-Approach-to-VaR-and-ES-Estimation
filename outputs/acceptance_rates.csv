@@ -1,4 +1,4 @@
 parameter,accept_rate
-mu,0.00065
-log_sigma,0.00075
-eta,0.00075
+mu,0.9437
+log_sigma,0.76695
+eta,0.69665

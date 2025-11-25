@@ -18,9 +18,9 @@ N_ITER    = 20000  # MCMC 总迭代次数
 BURN_FRAC = 0.5    # Burn-in 比例
 
 # MH 步长 (需要根据接受率进行调整)
-STEP_MU   = 0.04
-STEP_LOGS = 0.05
-STEP_ETA  = 0.05
+STEP_MU   = 0.02
+STEP_LOGS = 0.02
+STEP_ETA  = 0.08
 
 SEED = 42 # 随机种子，保证结果可复现
 
@@ -90,13 +90,30 @@ def loglik_normal_given_lambda(theta, r, lam):
     ll += -0.5 * np.sum(((r - mu) ** 2) / var_t)
     return ll
 
+def loglik_lambda_given_nu(lam, nu):
+    """
+    计算 log P(lambda | nu)
+    lambda_t ~ Gamma(shape=nu/2, rate=nu/2)
+    """
+    shape = nu / 2.0
+    rate  = nu / 2.0 # scipy notation: scale = 1/rate
+    # 使用 scipy 的 logpdf 求和，或者手写公式
+    return np.sum(stats.gamma.logpdf(lam, a=shape, scale=1.0/rate))
+
 def logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star):
-    """
-    层级模型下的对数后验：
-      log posterior = loglik_normal_given_lambda + logprior
-    注意：这里的似然使用了当前 λ 序列（在每轮迭代最先用 Gibbs 更新得到）
-    """
-    return loglik_normal_given_lambda(theta, r, lam) + logprior(theta, tau_mu, c_sigma, mean_nu_star)
+    mu, log_sigma, eta = theta
+    nu = 2.0 + np.exp(eta)
+    
+    # 1. log P(r | lam, mu, sigma)
+    ll_r = loglik_normal_given_lambda(theta, r, lam)
+    
+    # 2. log P(theta)
+    lp_theta = logprior(theta, tau_mu, c_sigma, mean_nu_star)
+    
+    # 3. ===【新增】=== log P(lam | nu)
+    ll_lam = loglik_lambda_given_nu(lam, nu)
+    
+    return ll_r + lp_theta + ll_lam
 
 # ---------- 关键：Gibbs 抽样 λ_t ----------
 def gibbs_sample_lambda(r, mu, sigma, nu):
@@ -123,7 +140,7 @@ def mwg_sampler(r,
                 n_iter=15000, burn_frac=0.5,
                 step_mu=0.05, step_logsig=0.05, step_eta=0.05,
                 tau_mu=0.5, c_sigma=1.5, mean_nu_star=30.0,
-                init=None, random_seed=42):
+                init=None, random_seed=42, thin =10):
     """
     Metropolis-within-Gibbs（MwG）：
       1) Gibbs：给定 (mu, sigma, nu) 对整列 λ 采样（可解析，必收）
@@ -160,6 +177,7 @@ def mwg_sampler(r,
         sigma = np.exp(log_sigma)
         nu    = 2.0 + np.exp(eta)
         lam   = gibbs_sample_lambda(r, mu, sigma, nu)
+        lp_cur = logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star)
 
         # (B) 再对 θ 的三个坐标做 MH 更新（与原来相同，只是似然换成用了 lam 的 normal 似然）
         for j in range(3):
@@ -179,13 +197,60 @@ def mwg_sampler(r,
 
     # ------ 返回后验样本与接受率 ------
     burn     = int(burn_frac * n_iter)
-    post     = chain[burn:, :]
+    # Thinning for better ACF
+    post     = chain[burn::thin, :]
     acc_rate = acc / n_iter
     return post, acc_rate, chain
 
+def calculate_var_es(mu_samps, sigma_samps, nu_samps, alpha=0.05):
+    """
+    计算 Value at Risk (VaR) 和 Expected Shortfall (ES)。
+    基于 t-分布的解析公式计算每组参数下的理论 VaR 和 ES。
+    
+    参数:
+    alpha: 风险水平 (默认 0.05，即 95% 置信度)
+           注意：这里计算的是左尾 (Left Tail)，即亏损方向。
+           
+    返回:
+    var_samps: VaR 的后验样本 (通常为负值，表示收益率的下限)
+    es_samps:  ES 的后验样本 (通常为更负的值，表示超过 VaR 后的平均亏损)
+    """
+    n = len(mu_samps)
+    var_samps = np.zeros(n)
+    es_samps = np.zeros(n)
+    
+    # 遍历所有后验样本
+    for i in range(n):
+        mu  = mu_samps[i]
+        sig = sigma_samps[i]
+        nu  = nu_samps[i]
+        
+        # 1. 计算 VaR
+        # VaR_alpha 就是 t 分布的 alpha 分位数
+        # stats.t.ppf 是累积分布函数的逆函数 (Percent Point Function)
+        q_std = stats.t.ppf(alpha, df=nu) # 标准 t 分布的分位数
+        var_samps[i] = mu + sig * q_std
+        
+        # 2. 计算 ES (Expected Shortfall)
+        # ES_alpha = E[R | R < VaR]
+        # 公式来源: McNeil, Frey, & Embrechts (2005) - Quantitative Risk Management
+        # 对于 X ~ t(nu, mu, sigma^2):
+        # ES = mu + sigma * ES_standard(nu, alpha)
+        # 其中 ES_standard = - ( (nu + q^2) / (nu - 1) ) * ( pdf(q) / alpha )
+        
+        if nu <= 1:
+            # 如果自由度 <= 1，期望不存在 (Cauchy 分布没有均值)
+            es_samps[i] = -np.inf 
+        else:
+            pdf_q = stats.t.pdf(q_std, df=nu) # 标准 t 分布在分位数处的密度值
+            es_std_term = - ((nu + q_std**2) / (nu - 1)) * (pdf_q / alpha)
+            es_samps[i] = mu + sig * es_std_term
+            
+    return var_samps, es_samps
+
 
 # --------------------------
-# 5) 便捷图表函数 (美化版)
+# 5) 便捷图表函数
 # --------------------------
 import matplotlib.pyplot as plt
 
@@ -432,6 +497,76 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
         fh.write("Acceptance rates (mu, log_sigma, eta): " + ", ".join(f"{x:.3f}" for x in acc_rate) + "\n")
         fh.write("ESS (mu, sigma, nu): " + ", ".join(f"{x:.1f}" for x in ess_vals) + "\n")
         fh.write(f"Summary CSV: {summary_path}\n")
+        
+    # ==========================================
+    # [新增] 风险指标计算 (VaR & ES)
+    # ==========================================
+    # 设定风险水平，比如 5% (0.05) 或 1% (0.01)
+    ALPHA = 0.05 
+    
+    print(f"\nCalculating VaR and ES at alpha={ALPHA}...")
+    var_chain, es_chain = calculate_var_es(mu_samps, sigma_samps, nu_samps, alpha=ALPHA)
+    
+    # 清洗数据：如果有 nu <= 1 导致的 -inf，将其过滤掉或单独报告
+    valid_mask = np.isfinite(es_chain)
+    if np.sum(~valid_mask) > 0:
+        print(f"Warning: {np.sum(~valid_mask)} samples had nu <= 1 (ES undefined).")
+        var_chain = var_chain[valid_mask]
+        es_chain  = es_chain[valid_mask]
+    
+    # 计算统计量
+    var_mean = np.mean(var_chain)
+    var_lower = np.percentile(var_chain, 2.5)
+    var_upper = np.percentile(var_chain, 97.5)
+    
+    es_mean = np.mean(es_chain)
+    es_lower = np.percentile(es_chain, 2.5)
+    es_upper = np.percentile(es_chain, 97.5)
+    
+    # 打印结果到控制台
+    print("-" * 40)
+    print(f"Risk Measures (alpha={ALPHA*100}%) Summary:")
+    print("-" * 40)
+    print(f"Value-at-Risk (VaR):")
+    print(f"  Mean Estimate: {var_mean:.4f}")
+    print(f"  95% CI:       [{var_lower:.4f}, {var_upper:.4f}]")
+    print(f"\nExpected Shortfall (ES):")
+    print(f"  Mean Estimate: {es_mean:.4f}")
+    print(f"  95% CI:       [{es_lower:.4f}, {es_upper:.4f}]")
+    print("-" * 40)
+    
+    # 保存结果到 CSV
+    risk_df = pd.DataFrame({
+        "Metric": ["VaR", "ES"],
+        "Mean": [var_mean, es_mean],
+        "CI_Lower_2.5": [var_lower, es_lower],
+        "CI_Upper_97.5": [var_upper, es_upper]
+    })
+    risk_out_path = os.path.join(OUT_DIR, "risk_measures.csv")
+    risk_df.to_csv(risk_out_path, index=False)
+    print(f"Risk measures saved to: {risk_out_path}")
+    
+    # (可选) 绘制 VaR 和 ES 的后验分布图
+    with plt.style.context('seaborn-v0_8-darkgrid'):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # VaR 直方图
+        axes[0].hist(var_chain, bins=50, density=True, alpha=0.7, color='steelblue')
+        axes[0].axvline(var_mean, color='red', linestyle='--', label=f'Mean: {var_mean:.3f}')
+        axes[0].set_title(f"Posterior Distribution of VaR ({ALPHA*100}%)")
+        axes[0].set_xlabel("Return Level")
+        axes[0].legend()
+        
+        # ES 直方图
+        axes[1].hist(es_chain, bins=50, density=True, alpha=0.7, color='orange')
+        axes[1].axvline(es_mean, color='red', linestyle='--', label=f'Mean: {es_mean:.3f}')
+        axes[1].set_title(f"Posterior Distribution of ES ({ALPHA*100}%)")
+        axes[1].set_xlabel("Return Level")
+        axes[1].legend()
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUT_DIR, "risk_posterior.png"), dpi=144)
+        plt.close(fig)
 
     print("Posterior summaries and diagnostics saved to the outputs/ folder.")
 
