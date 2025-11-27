@@ -126,7 +126,7 @@ To ensure the validity of our MCMC results, we performed standard convergence ch
 
 
 | Parameter            | Mean Estimate | Interpretation                                                      |
-| :--------------------- | :-------------- | :-------------------------------------------------------------------- |
+| :------------------- | :------------ | :------------------------------------------------------------------ |
 | **$\mu$ (Mu)**       | ~0.05%        | Average daily return is close to zero, typical for daily data.      |
 | **$\sigma$ (Sigma)** | ~3.10%        | Base daily volatility is ~3.1%, indicating a high-volatility asset. |
 | **$\nu$ (Nu)**       | **~7.35**     | Degrees of freedom$\nu \ll 30$ confirms significant **fat tails**.  |
@@ -139,7 +139,7 @@ We calculated risk metrics at the 95% confidence level.
 
 
 | Metric        | Estimate (Mean) | 95% Credible Interval | Business Insight                                                                                                     |
-| :-------------- | :---------------- | :---------------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| :------------ | :-------------- | :-------------------- | :------------------------------------------------------------------------------------------------------------------- |
 | **VaR (95%)** | **-6.09%**      | [-6.58%, -5.66%]      | In 95% of trading days, losses will not exceed**6.1%**. This serves as a "safety baseline" for margin requirements.  |
 | **ES (95%)**  | **-8.69%**      | [-9.79%, -7.88%]      | If the VaR threshold is breached, the expected average loss is**8.7%**. This highlights the severity of tail events. |
 

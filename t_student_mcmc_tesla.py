@@ -4,20 +4,20 @@ import numpy as np
 from scipy import stats
 
 # ===================================================================
-# 1) 全局配置
+# 1) Global Configuration
 # ===================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(BASE_DIR, "Tesla_close.csv")  # 数据文件路径
-RETURNS_ARE_PERCENT = False        # CSV 中的收益率是否已经是百分比形式
+CSV_PATH = os.path.join(BASE_DIR, "Tesla_close.csv")  # Data file path
+RETURNS_ARE_PERCENT = False        # Whether returns in CSV are already in percentage
 
 OUT_DIR = os.path.join(BASE_DIR, "outputs")
 if not os.path.exists(OUT_DIR):
     os.makedirs(OUT_DIR)
 
-N_ITER    = 20000  # MCMC 总迭代次数
-BURN_FRAC = 0.5    # Burn-in 比例
+N_ITER    = 20000  # Total MCMC iterations
+BURN_FRAC = 0.5    # Burn-in fraction
 
-# MH 步长 (需要根据接受率进行调整)
+# MH step size (needs adjustment based on acceptance rate)(percentage of the total N_iter)
 STEP_MU   = 0.02
 STEP_LOGS = 0.02
 STEP_ETA  = 0.08
@@ -36,9 +36,6 @@ def mad_robust(x):
 def load_returns(csv_path, returns_are_percent=True):
     """从 CSV 加载收益率数据。"""
     df = pd.read_csv(csv_path)
-    # 假设收益率数据在名为 'Log_Return' 的列中
-    if 'Log_Return' not in df.columns:
-        raise ValueError("Column 'Log_Return' not found in CSV file.")
     r = df['Log_Return'].dropna().values
     if not returns_are_percent:
         r = r * 100.0
@@ -137,13 +134,13 @@ def gibbs_sample_lambda(r, mu, sigma, nu):
 # ============ Metropolis-within-Gibbs 采样器（最小改动版） ============
 
 def mwg_sampler(r,
-                n_iter=15000, burn_frac=0.5,
+                n_iter=200000, burn_frac=0.1,
                 step_mu=0.05, step_logsig=0.05, step_eta=0.05,
-                tau_mu=0.5, c_sigma=1.5, mean_nu_star=30.0,
-                init=None, random_seed=42, thin =10):
+                tau_mu=100, c_sigma=1.5, mean_nu_star=30.0,
+                init=None, random_seed=42, thin =50):
     """
     Metropolis-within-Gibbs（MwG）：
-      1) Gibbs：给定 (mu, sigma, nu) 对整列 λ 采样（可解析，必收）
+      1 Gibbs：给定 (mu, sigma, nu) 对整列 λ 采样（可解析，必收）
       2) MH：依次对 (mu, log_sigma, eta) 做随机游走提议并接受/拒绝
     与你原来的 MH 采样器的唯一区别：每轮迭代开始，先更新 λ
     """
