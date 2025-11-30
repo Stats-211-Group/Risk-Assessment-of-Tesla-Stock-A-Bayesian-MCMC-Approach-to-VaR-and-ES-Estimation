@@ -14,13 +14,12 @@ OUT_DIR = os.path.join(BASE_DIR, "outputs")
 if not os.path.exists(OUT_DIR):
     os.makedirs(OUT_DIR)
 
-N_ITER    = 20000  # Total MCMC iterations
-BURN_FRAC = 0.5    # Burn-in fraction
+N_ITER    = 50000  # Total MCMC iterations
+BURN_FRAC = 0.1    # Burn-in fraction
 
 # MH step size (needs adjustment based on acceptance rate)(percentage of the total N_iter)
-STEP_MU   = 0.02
-STEP_LOGS = 0.02
-STEP_ETA  = 0.08
+STEP_MU   = 0.25
+STEP_ETA  = 0.15
 
 SEED = 42 # 随机种子，保证结果可复现
 
@@ -42,30 +41,30 @@ def load_returns(csv_path, returns_are_percent=True):
     return r
 
 # ---------- 先验 ----------
-def logprior(theta, tau_mu, c_sigma, mean_nu_star):
+def logprior(theta, tau_mu, alpha_ig, beta_ig, mean_nu_star):
     """
-    先验的对数：
-      mu ~ N(0, tau_mu^2)
-      sigma ~ Half-Cauchy(0, c_sigma)    （在真实尺度 sigma 上）
-      (nu-2) ~ Exponential(mean = mean_nu_star)
-    注意：代码在 (log_sigma, eta) 空间工作，需加 Jacobian：+log_sigma + eta
+        log prior:
+            mu ~ N(0, tau_mu^2)
+            sigma^2 ~ Inverse-Gamma(alpha_ig, beta_ig)
+            nu ~ Exponential(mean = mean_nu_star)
+        Note: the code works in (log_sigma, eta) space, so include Jacobian +log_sigma + eta
     """
     mu, log_sigma, eta = theta
     sigma   = np.exp(log_sigma)      # sigma > 0
-    nu_star = np.exp(eta)            # nu - 2 > 0
+    sigma2  = sigma ** 2
+    nu = np.exp(eta)                 # nu > 0
 
     # mu 的正态先验
     lp = stats.norm.logpdf(mu, 0.0, tau_mu)
 
-    # sigma 的 Half-Cauchy 先验（对数密度）
-    # f(sigma) = [2 / (pi * c)] * 1 / (1 + (sigma/c)^2), sigma>0
-    lp += np.log(2.0) - np.log(np.pi * c_sigma) - np.log(1.0 + (sigma / c_sigma)**2)
+    # sigma^2 的逆伽马先验（对数密度）
+    lp += stats.invgamma.logpdf(sigma2, a=alpha_ig, scale=beta_ig)
 
-    # (nu-2) 的指数先验（均值 mean_nu_star；rate = 1/mean）
+    # nu 的指数先验（均值 mean_nu_star；rate = 1/mean）
     rate = 1.0 / mean_nu_star
-    lp += np.log(rate) - rate * nu_star
+    lp += np.log(rate) - rate * nu
 
-    # 变量变换的 Jacobian：sigma = exp(log_sigma) → +log_sigma；nu-2 = exp(eta) → +eta
+    # 变量变换的 Jacobian：sigma = exp(log_sigma) → +log_sigma；nu = exp(eta) → +eta
     lp += log_sigma + eta
     return lp
 
@@ -97,15 +96,15 @@ def loglik_lambda_given_nu(lam, nu):
     # 使用 scipy 的 logpdf 求和，或者手写公式
     return np.sum(stats.gamma.logpdf(lam, a=shape, scale=1.0/rate))
 
-def logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star):
+def logpost_hier(theta, r, lam, tau_mu, alpha_ig, beta_ig, mean_nu_star):
     mu, log_sigma, eta = theta
-    nu = 2.0 + np.exp(eta)
+    nu = np.exp(eta)
     
     # 1. log P(r | lam, mu, sigma)
     ll_r = loglik_normal_given_lambda(theta, r, lam)
     
     # 2. log P(theta)
-    lp_theta = logprior(theta, tau_mu, c_sigma, mean_nu_star)
+    lp_theta = logprior(theta, tau_mu, alpha_ig, beta_ig, mean_nu_star)
     
     # 3. ===【新增】=== log P(lam | nu)
     ll_lam = loglik_lambda_given_nu(lam, nu)
@@ -134,15 +133,17 @@ def gibbs_sample_lambda(r, mu, sigma, nu):
 # ============ Metropolis-within-Gibbs 采样器（最小改动版） ============
 
 def mwg_sampler(r,
-                n_iter=200000, burn_frac=0.1,
-                step_mu=0.05, step_logsig=0.05, step_eta=0.05,
-                tau_mu=100, c_sigma=1.5, mean_nu_star=30.0,
-                init=None, random_seed=42, thin =50):
+                n_iter, burn_frac,
+                step_mu, step_eta,
+                tau_mu, alpha_ig, beta_ig, mean_nu_star,
+                random_seed,
+                init=None, thin=50):
     """
-    Metropolis-within-Gibbs（MwG）：
-      1 Gibbs：给定 (mu, sigma, nu) 对整列 λ 采样（可解析，必收）
-      2) MH：依次对 (mu, log_sigma, eta) 做随机游走提议并接受/拒绝
-    与你原来的 MH 采样器的唯一区别：每轮迭代开始，先更新 λ
+        Metropolis-within-Gibbs（MwG）：
+            1) Gibbs：给定 (mu, sigma, nu) 对整列 λ 采样（可解析，必收）
+            2) Gibbs：利用逆伽马共轭关系直接抽样 sigma^2
+            3) MH：依次对 (mu, eta) 做随机游走提议并接受/拒绝
+        与纯 MH 采样器的不同之处在于，lambda 与 sigma^2 都有 Gibbs 步骤
     """
     rng = np.random.default_rng(random_seed)
 
@@ -151,7 +152,7 @@ def mwg_sampler(r,
         s_robust = mad_robust(r)
         mu0   = 0.0
         logs0 = np.log(max(s_robust, 1e-8))
-        eta0  = np.log(8.0 - 2.0)   # 初始 nu ≈ 8
+        eta0  = np.log(8.0)   # 初始 nu ≈ 8
         theta = np.array([mu0, logs0, eta0], dtype=float)
     else:
         theta = np.array(init, dtype=float)
@@ -159,36 +160,47 @@ def mwg_sampler(r,
     # 初始 λ：用当前参数的条件式 Gibbs 一次（或全 1 也可）
     mu, log_sigma, eta = theta
     sigma = np.exp(log_sigma)
-    nu    = 2.0 + np.exp(eta)
+    nu    = np.exp(eta)
     lam   = gibbs_sample_lambda(r, mu, sigma, nu)
 
-    steps   = np.array([step_mu, step_logsig, step_eta], dtype=float)
-    acc     = np.zeros(3, dtype=int)
+    mh_indices = (0, 2)  # indices for mu and eta within theta
+    mh_steps   = np.array([step_mu, step_eta], dtype=float)
+    acc        = np.zeros(len(mh_indices), dtype=int)
     chain   = np.zeros((n_iter, 3), dtype=float)  # 保存 θ 的轨迹
-    lp_cur  = logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star)
+    lp_cur  = logpost_hier(theta, r, lam, tau_mu, alpha_ig, beta_ig, mean_nu_star)
 
     # ------ 主循环 ------
     for it in range(n_iter):
         # (A) 先对整列 λ 做一次 Gibbs 更新（必收）
         mu, log_sigma, eta = theta
         sigma = np.exp(log_sigma)
-        nu    = 2.0 + np.exp(eta)
+        nu    = np.exp(eta)
         lam   = gibbs_sample_lambda(r, mu, sigma, nu)
-        lp_cur = logpost_hier(theta, r, lam, tau_mu, c_sigma, mean_nu_star)
 
-        # (B) 再对 θ 的三个坐标做 MH 更新（与原来相同，只是似然换成用了 lam 的 normal 似然）
-        for j in range(3):
+        # (B) 利用 IG 共轭对 sigma^2 做 Gibbs 更新
+        resid = r - mu
+        shape_post = alpha_ig + len(r) / 2.0
+        scale_post = beta_ig + 0.5 * np.sum(lam * (resid ** 2))
+        sigma2 = stats.invgamma.rvs(a=shape_post, scale=scale_post, random_state=rng)
+        log_sigma = 0.5 * np.log(sigma2)
+        theta[1] = log_sigma
+
+        # 更新 logpost 以便 MH 步
+        lp_cur = logpost_hier(theta, r, lam, tau_mu, alpha_ig, beta_ig, mean_nu_star)
+
+        # (C) 对 mu 与 eta 做 MH 更新
+        for idx, param_idx in enumerate(mh_indices):
             prop = theta.copy()
-            prop[j] += rng.normal(0.0, steps[j])  # 对称正态提议
+            prop[param_idx] += rng.normal(0.0, mh_steps[idx])  # 对称正态提议
 
             # 计算候选点的对数后验（注意：似然使用给定 lam 的 normal 形式）
-            lp_prop = logpost_hier(prop, r, lam, tau_mu, c_sigma, mean_nu_star)
+            lp_prop = logpost_hier(prop, r, lam, tau_mu, alpha_ig, beta_ig, mean_nu_star)
 
             # MH 接受判据：log(u) <= logpost_prop - logpost_cur
             if np.log(rng.random()) <= (lp_prop - lp_cur):
                 theta  = prop
                 lp_cur = lp_prop
-                acc[j] += 1
+                acc[idx] += 1
 
         chain[it, :] = theta
 
@@ -196,7 +208,7 @@ def mwg_sampler(r,
     burn     = int(burn_frac * n_iter)
     # Thinning for better ACF
     post     = chain[burn::thin, :]
-    acc_rate = acc / n_iter
+    acc_rate = np.array([acc[0] / n_iter, 1.0, acc[1] / n_iter])
     return post, acc_rate, chain
 
 def calculate_var_es(mu_samps, sigma_samps, nu_samps, alpha=0.05):
@@ -380,6 +392,39 @@ def ess_from_acf(x, max_lag=200):
     tau = 1.0 + 2.0 * s        # integrated autocorrelation time
     return n / max(tau, 1e-12) # 防止除零
 
+def geweke_diagnostic(chain, first=0.1, last=0.5):
+    """
+    Performs the Geweke diagnostic test.
+    Compares the mean of the first 10% of the chain with the last 50%.
+    Returns a Z-score. 
+    |Z| > 1.96 indicates non-convergence (at 5% significance level).
+    """
+    # 1. Split the chain
+    n = len(chain)
+    n_first = int(n * first)
+    n_last  = int(n * last)
+    
+    if n_first == 0 or n_last == 0:
+        return np.nan
+        
+    data_first = chain[:n_first]
+    data_last  = chain[-n_last:]
+    
+    # 2. Calculate Means
+    mean_first = np.mean(data_first)
+    mean_last  = np.mean(data_last)
+    
+    # 3. Calculate Variance (corrected for autocorrelation)
+    # Approximation: Var(mean) = Var(x) / ESS
+    # We use the ess_from_acf function you already have
+    var_first = np.var(data_first, ddof=1) / ess_from_acf(data_first)
+    var_last  = np.var(data_last, ddof=1) / ess_from_acf(data_last)
+    
+    # 4. Calculate Z-score
+    z_score = (mean_first - mean_last) / np.sqrt(var_first + var_last)
+    
+    return z_score
+
 
 
 # --------------------------
@@ -394,8 +439,9 @@ def main():
     s_robust = mad_robust(r)
     hyper_params = {
         "tau_mu":       s_robust,      # mu 的先验标准差，与数据尺度相关
-        "c_sigma":      s_robust,      # sigma 的先验尺度
-        "mean_nu_star": 30.0           # nu-2 的先验均值（无信息）
+        "alpha_ig":     3.0,           # 弱信息先验形状参数
+        "beta_ig":      max(s_robust ** 2, 1e-6),  # 规模参数，匹配数据尺度
+        "mean_nu_star": 30.0           # Prior mean for nu (weakly informative)
     }
 
     # 运行采样器
@@ -403,7 +449,6 @@ def main():
                                         n_iter=N_ITER,
                                         burn_frac=BURN_FRAC,
                                         step_mu=STEP_MU,
-                                        step_logsig=STEP_LOGS,
                                         step_eta=STEP_ETA,
                                         random_seed=SEED,
                                         **hyper_params)
@@ -423,7 +468,7 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
     # 后验样本 → 真实参数
     mu_samps    = post[:, 0]
     sigma_samps = np.exp(post[:, 1])
-    nu_samps    = 2.0 + np.exp(post[:, 2])
+    nu_samps    = np.exp(post[:, 2])
 
     # 后验中位数（可作为 plug-in 拟合量）
     mu_med = float(np.median(mu_samps))
@@ -447,7 +492,7 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
                os.path.join(OUT_DIR, "trace_mu.png"))
     plot_trace(np.exp(chain[:, 1]), "Trace: σ", "sigma (%)",
                os.path.join(OUT_DIR, "trace_sigma.png"))
-    plot_trace(2.0 + np.exp(chain[:, 2]), "Trace: ν", "nu (df)",
+    plot_trace(np.exp(chain[:, 2]), "Trace: ν", "nu (df)",
                os.path.join(OUT_DIR, "trace_nu.png"))
     
     # ---- ACF 图：分别对 μ、σ、ν 画 ----
@@ -494,6 +539,19 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
         fh.write("Acceptance rates (mu, log_sigma, eta): " + ", ".join(f"{x:.3f}" for x in acc_rate) + "\n")
         fh.write("ESS (mu, sigma, nu): " + ", ".join(f"{x:.1f}" for x in ess_vals) + "\n")
         fh.write(f"Summary CSV: {summary_path}\n")
+    
+    # Calculate Geweke Z-scores
+    z_mu = geweke_diagnostic(mu_samps)
+    z_sigma = geweke_diagnostic(sigma_samps)
+    z_nu = geweke_diagnostic(nu_samps)
+    
+    print("-" * 30)
+    print("Geweke Diagnostics (Z-scores):")
+    print(f"  Mu:    {z_mu:.3f}")
+    print(f"  Sigma: {z_sigma:.3f}")
+    print(f"  Nu:    {z_nu:.3f}")
+    print("  (|Z| < 1.96 suggests convergence)")
+    print("-" * 30)
         
     # ==========================================
     # [新增] 风险指标计算 (VaR & ES)
