@@ -1,0 +1,26 @@
+=== Run Configuration ===
+Sampler: Metropolis-within-Gibbs
+Iterations: 50000, burn-in fraction: 0.1
+
+Hyperparameters:
+  tau_mu: 100
+  alpha_ig: 0.01
+  beta_ig: 0.01
+  mean_nu_star: 30.0
+
+Acceptance rates (mu, log_sigma, eta): 0.411, 1.000, 0.289
+ESS (mu, sigma, nu): 900.0, 422.8, 321.5
+Posterior summary CSV: d:\A_Python_Project\Stat 211 Project\outputs\posterior_summary.csv
+Acceptance rates CSV: d:\A_Python_Project\Stat 211 Project\outputs\acceptance_rates.csv
+
+Geweke diagnostics (Z-scores):
+  mu   : 0.369
+  sigma: 1.220
+  nu   : 0.373
+(|Z| < 1.96 suggests convergence)
+
+VaR mean (alpha=5.0%): -6.1064
+VaR 95% CI: [-6.5771, -5.6713]
+ES mean  (alpha=5.0%): -8.6731
+ES 95% CI: [-9.7404, -7.8904]
+Risk metrics CSV: d:\A_Python_Project\Stat 211 Project\outputs\risk_measures.csv

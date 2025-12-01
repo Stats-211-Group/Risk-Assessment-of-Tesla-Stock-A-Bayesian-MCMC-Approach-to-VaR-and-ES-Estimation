@@ -14,23 +14,20 @@ OUT_DIR = os.path.join(BASE_DIR, "outputs")
 if not os.path.exists(OUT_DIR):
     os.makedirs(OUT_DIR)
 
+REPORT_FILENAME = "analysis_report.txt"
+
 N_ITER    = 50000  # Total MCMC iterations
 BURN_FRAC = 0.1    # Burn-in fraction
 
 # MH step size (needs adjustment based on acceptance rate)(percentage of the total N_iter)
-STEP_MU   = 0.25
-STEP_ETA  = 0.15
+STEP_MU   = 0.30 # 稍微增大步长以降低接受率，提高ESS
+STEP_ETA  = 0.2
 
 SEED = 42 # 随机种子，保证结果可复现
 
 # ===================================================================
 
 # ============ 工具函数 ============
-
-def mad_robust(x):
-    """稳健尺度：1.4826 * MAD"""
-    med = np.median(x)
-    return 1.4826 * np.median(np.abs(x - med))
 
 def load_returns(csv_path, returns_are_percent=True):
     """从 CSV 加载收益率数据。"""
@@ -149,9 +146,8 @@ def mwg_sampler(r,
 
     # ------ 初始化 θ 和 λ ------
     if init is None:
-        s_robust = mad_robust(r)
         mu0   = 0.0
-        logs0 = np.log(max(s_robust, 1e-8))
+        logs0 = np.log(np.std(r, ddof=1)) # 使用数据的样本标准差作为初始值
         eta0  = np.log(8.0)   # 初始 nu ≈ 8
         theta = np.array([mu0, logs0, eta0], dtype=float)
     else:
@@ -435,12 +431,11 @@ def main():
     # 读收益（单位：百分比）
     r = load_returns(CSV_PATH, returns_are_percent=RETURNS_ARE_PERCENT)
 
-    # (动态设定先验超参数)
-    s_robust = mad_robust(r)
+    # (设定先验超参数 — 使用固定尺度以保持简单)
     hyper_params = {
-        "tau_mu":       s_robust,      # mu 的先验标准差，与数据尺度相关
-        "alpha_ig":     3.0,           # 弱信息先验形状参数
-        "beta_ig":      max(s_robust ** 2, 1e-6),  # 规模参数，匹配数据尺度
+        "tau_mu":       100,      # mu 的先验标准差，与数据尺度相关
+        "alpha_ig":     0.01,           # 弱信息先验形状参数
+        "beta_ig":      0.01,  # 固定规模参数
         "mean_nu_star": 30.0           # Prior mean for nu (weakly informative)
     }
 
@@ -531,14 +526,6 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
         "accept_rate": acc_rate,
     })
     acc_df.to_csv(os.path.join(OUT_DIR, "acceptance_rates.csv"), index=False)
-
-    diagnostics_txt = os.path.join(OUT_DIR, "diagnostics.txt")
-    with open(diagnostics_txt, "w", encoding="utf-8") as fh:
-        fh.write(f"Sampler: {sampler_name}\n")
-        fh.write(f"Iterations: {len(chain)}, burn-in fraction: {BURN_FRAC}\n")
-        fh.write("Acceptance rates (mu, log_sigma, eta): " + ", ".join(f"{x:.3f}" for x in acc_rate) + "\n")
-        fh.write("ESS (mu, sigma, nu): " + ", ".join(f"{x:.1f}" for x in ess_vals) + "\n")
-        fh.write(f"Summary CSV: {summary_path}\n")
     
     # Calculate Geweke Z-scores
     z_mu = geweke_diagnostic(mu_samps)
@@ -564,8 +551,9 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
     
     # 清洗数据：如果有 nu <= 1 导致的 -inf，将其过滤掉或单独报告
     valid_mask = np.isfinite(es_chain)
-    if np.sum(~valid_mask) > 0:
-        print(f"Warning: {np.sum(~valid_mask)} samples had nu <= 1 (ES undefined).")
+    invalid_es_count = int(np.sum(~valid_mask))
+    if invalid_es_count > 0:
+        print(f"Warning: {invalid_es_count} samples had nu <= 1 (ES undefined).")
         var_chain = var_chain[valid_mask]
         es_chain  = es_chain[valid_mask]
     
@@ -623,7 +611,41 @@ def analyze_and_plot_results(r, post, chain, acc_rate, sampler_name, hyper_param
         plt.savefig(os.path.join(OUT_DIR, "risk_posterior.png"), dpi=144)
         plt.close(fig)
 
+    # Consolidated text report
+    report_lines = []
+    report_lines.append("=== Run Configuration ===")
+    report_lines.append(f"Sampler: {sampler_name}")
+    report_lines.append(f"Iterations: {len(chain)}, burn-in fraction: {BURN_FRAC}")
+    report_lines.append("")
+    report_lines.append("Hyperparameters:")
+    for key, value in hyper_params.items():
+        report_lines.append(f"  {key}: {value}")
+    report_lines.append("")
+    report_lines.append("Acceptance rates (mu, log_sigma, eta): " + ", ".join(f"{x:.3f}" for x in acc_rate))
+    report_lines.append("ESS (mu, sigma, nu): " + ", ".join(f"{x:.1f}" for x in ess_vals))
+    report_lines.append(f"Posterior summary CSV: {summary_path}")
+    report_lines.append(f"Acceptance rates CSV: {os.path.join(OUT_DIR, 'acceptance_rates.csv')}")
+    report_lines.append("")
+    report_lines.append("Geweke diagnostics (Z-scores):")
+    report_lines.append(f"  mu   : {z_mu:.3f}")
+    report_lines.append(f"  sigma: {z_sigma:.3f}")
+    report_lines.append(f"  nu   : {z_nu:.3f}")
+    report_lines.append("(|Z| < 1.96 suggests convergence)")
+    report_lines.append("")
+    report_lines.append(f"VaR mean (alpha={ALPHA*100:.1f}%): {var_mean:.4f}")
+    report_lines.append(f"VaR 95% CI: [{var_lower:.4f}, {var_upper:.4f}]")
+    report_lines.append(f"ES mean  (alpha={ALPHA*100:.1f}%): {es_mean:.4f}")
+    report_lines.append(f"ES 95% CI: [{es_lower:.4f}, {es_upper:.4f}]")
+    if invalid_es_count > 0:
+        report_lines.append(f"Warning: {invalid_es_count} samples discarded because nu <= 1 made ES undefined.")
+    report_lines.append(f"Risk metrics CSV: {risk_out_path}")
+
+    report_path = os.path.join(OUT_DIR, REPORT_FILENAME)
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(report_lines))
+
     print("Posterior summaries and diagnostics saved to the outputs/ folder.")
+    print(f"Detailed text report written to: {report_path}")
 
 
 if __name__ == "__main__":
