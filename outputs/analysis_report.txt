@@ -1,6 +1,6 @@
 === Run Configuration ===
 Sampler: Metropolis-within-Gibbs
-Iterations: 50000, burn-in fraction: 0.1
+Iterations: 100000, burn-in fraction: 0.1
 
 Hyperparameters:
   tau_mu: 100
@@ -8,19 +8,22 @@ Hyperparameters:
   beta_ig: 0.01
   mean_nu_star: 30.0
 
-Acceptance rates (mu, log_sigma, eta): 0.411, 1.000, 0.289
-ESS (mu, sigma, nu): 900.0, 422.8, 321.5
-Posterior summary CSV: d:\A_Python_Project\Stat 211 Project\outputs\posterior_summary.csv
-Acceptance rates CSV: d:\A_Python_Project\Stat 211 Project\outputs\acceptance_rates.csv
+Acceptance rates (mu, log_sigma, eta): 0.411, 1.000, 0.368
+ESS (mu, sigma, nu): 1727.2, 1023.2, 687.2
+
+Posterior summary table:
+   param   median     mean       sd      p2.5    p97.5         ess
+   mu(%) 0.026741 0.029975 0.129141 -0.214486 0.285688 1727.247945
+sigma(%) 3.101944 3.099425 0.146550  2.815304 3.371537 1023.162777
+      nu 5.491785 5.713844 1.306993  3.819538 8.848072  687.248315
 
 Geweke diagnostics (Z-scores):
-  mu   : 0.369
-  sigma: 1.220
-  nu   : 0.373
+  mu   : 0.264
+  sigma: 0.163
+  nu   : -0.121
 (|Z| < 1.96 suggests convergence)
 
-VaR mean (alpha=5.0%): -6.1064
-VaR 95% CI: [-6.5771, -5.6713]
-ES mean  (alpha=5.0%): -8.6731
-ES 95% CI: [-9.7404, -7.8904]
-Risk metrics CSV: d:\A_Python_Project\Stat 211 Project\outputs\risk_measures.csv
+VaR mean (alpha=5.0%): -6.1030
+VaR 95% CI: [-6.5759, -5.6516]
+ES mean  (alpha=5.0%): -8.6635
+ES 95% CI: [-9.6965, -7.8682]
