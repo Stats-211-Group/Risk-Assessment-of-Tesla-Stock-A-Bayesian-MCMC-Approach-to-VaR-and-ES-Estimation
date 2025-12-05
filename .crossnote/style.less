@@ -1,0 +1,19 @@
+/* 1. 使用 !important 强制覆盖所有主题的默认设置 */
+.markdown-preview.markdown-preview {
+    font-family: "Times New Roman", "SimSun", serif !important;
+}
+
+/* 2. 双重保险：防止某些元素单独定义了字体 */
+.markdown-preview.markdown-preview body,
+.markdown-preview.markdown-preview p,
+.markdown-preview.markdown-preview h1,
+.markdown-preview.markdown-preview h2,
+.markdown-preview.markdown-preview h3,
+.markdown-preview.markdown-preview li {
+    font-family: "Times New Roman", "SimSun", serif !important;
+}
+
+/* 3. 顺便把行高也强制了 */
+.markdown-preview.markdown-preview {
+    line-height: 1.8 !important;
+}

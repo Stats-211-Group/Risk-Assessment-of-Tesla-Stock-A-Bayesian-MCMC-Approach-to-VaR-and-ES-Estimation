@@ -8,22 +8,22 @@ Hyperparameters:
   beta_ig: 0.01
   mean_nu_star: 30.0
 
-Acceptance rates (mu, log_sigma, eta): 0.411, 1.000, 0.368
-ESS (mu, sigma, nu): 1727.2, 1023.2, 687.2
+Acceptance rates (mu, log_sigma, eta): 0.411, 1.000, 0.289
+ESS (mu, sigma, nu): 1754.7, 927.9, 539.1
 
 Posterior summary table:
    param   median     mean       sd      p2.5    p97.5         ess
-   mu(%) 0.026741 0.029975 0.129141 -0.214486 0.285688 1727.247945
-sigma(%) 3.101944 3.099425 0.146550  2.815304 3.371537 1023.162777
-      nu 5.491785 5.713844 1.306993  3.819538 8.848072  687.248315
+   mu(%) 0.030677 0.028589 0.127602 -0.215391 0.267362 1754.716597
+sigma(%) 3.100258 3.105878 0.147778  2.824755 3.405757  927.936794
+      nu 5.535100 5.766081 1.354263  3.828679 8.949936  539.115848
 
 Geweke diagnostics (Z-scores):
-  mu   : 0.264
-  sigma: 0.163
-  nu   : -0.121
+  mu   : -0.249
+  sigma: -0.811
+  nu   : -0.623
 (|Z| < 1.96 suggests convergence)
 
-VaR mean (alpha=5.0%): -6.1030
-VaR 95% CI: [-6.5759, -5.6516]
-ES mean  (alpha=5.0%): -8.6635
-ES 95% CI: [-9.6965, -7.8682]
+VaR mean (alpha=5.0%): -6.1069
+VaR 95% CI: [-6.5979, -5.6557]
+ES mean  (alpha=5.0%): -8.6568
+ES 95% CI: [-9.6306, -7.8778]
