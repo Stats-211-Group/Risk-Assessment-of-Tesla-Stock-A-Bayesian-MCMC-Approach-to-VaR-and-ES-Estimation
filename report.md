@@ -1,23 +1,38 @@
 # Risk Assessment of Tesla Stock: A Bayesian MCMC Approach to VaR and ES Estimation
 
 **Course:** STATS 211
-**Team Members:** Ke Ning; Yanpei Yu; Ziying Ye
+**Team Members:**
+
+* **Ke Ning:** Mathematical Formulation & Theoretical Derivation
+* **Yanpei Yu:** Algorithm Implementation, Visualization & Diagnostics
+* **Ziying Ye:** Hierarchical Model Construction & Prior Specificatio
+
 **Date:** Dec 5th, 2025
 
 ---
+
+### AI Statement
+
+We have used AI for the following part:
+
+* **Code Optimization & Debugging:** AI was used to identify and fix logical errors in the Python implementation of the Metropolis-within-Gibbs sampler, specifically regarding the indentation in the risk metric calculation function and the enforcement of constraints on the degrees of freedom (**$\nu$**).
+* **Theoretical Verification:** We utilized AI to verify the derivation of the conditional posterior distributions for the variance (**$\sigma^2$**) and latent weights (**$\lambda_t$**), ensuring the correctness of the Gibbs sampling steps.
+* **Visualization Assistance:** AI assisted in generating matplotlib code snippets to produce high-quality diagnostic plots (Trace plots, ACF plots) and posterior histograms.
+* **Report Drafting & Refinement:** The structure and initial drafts of specific sections of this report (e.g., Methodology, Conclusion) were generated with the assistance of AI. These drafts were subsequently reviewed, fact-checked, and refined by the team to ensure accuracy and alignment with our findings.
+
 
 ## 1. Introduction
 
 This project aims to model the daily returns of Tesla Inc. (TSLA) using Bayesian statistical methods and to quantify its tail risk. Financial asset returns often exhibit "leptokurtic and fat-tailed" characteristics, meaning extreme market movements occur more frequently than predicted by a standard Gaussian distribution. Consequently, traditional risk models based on normality assumptions often underestimate potential losses.
 
-To address this, we employ a **Student's t-distribution** model, implemented via a **Metropolis-within-Gibbs** sampling algorithm. This allows us to estimate the posterior distributions of the model parameters ($\mu, \sigma, \nu$). Based on these posterior samples, we calculate the **Value at Risk (VaR)** and **Expected Shortfall (ES)** at a 95% confidence level, providing a robust quantitative basis for risk management.
+To address this, we employ a Student's t-distribution model, implemented via a Metropolis-within-Gibbs sampling algorithm. This allows us to estimate the posterior distributions of the model parameters ($\mu, \sigma, \nu$). Based on these posterior samples, we calculate the Value at Risk (VaR) and Expected Shortfall (ES) at a 95% confidence level, providing a robust quantitative basis for risk management.
 
 ## 2. Data Description
 
 * **Source:** Yahoo Finance, Public Market Data
 * **Time Period:** January 4, 2022 – December 31, 2024 (3 Years)
 * **Preprocessing:**
-Daily closing prices ($P_t$) were converted into log-returns ($r_t$). For numerical stability during Bayesian inference, daily log-returns were scaled by 100 and converted into **percentage points**. Consequently, all reported parameter estimates ($\mu, \sigma$) and risk metrics (VaR, ES) are expressed in percentages (%):
+  Daily closing prices ($P_t$) were converted into log-returns ($r_t$). For numerical stability during Bayesian inference, daily log-returns were scaled by 100 and converted into percentage points. Consequently, all reported parameter estimates ($\mu, \sigma$) and risk metrics (VaR, ES) are expressed in percentages (%):
 
 $$
 r_t = 100 \cdot \ln\left( \frac{P_t}{P_{t-1}} \right)
@@ -66,12 +81,12 @@ Strategic Choice for Variance ($\sigma^2$): Inverse-Gamma vs. Half-Cauchy
 
 While the Half-Cauchy distribution is often theoretically preferred for its robustness, we selected the Inverse-Gamma prior for its significant computational advantages in this specific framework.
 
-* **Conjugacy & Efficiency:** The Inverse-Gamma is the conjugate prior for the variance of a Normal distribution. This property allows us to analytically derive the full conditional posterior and implement an exact **Gibbs Sampling** step for **$\sigma^2$**.
+* **Conjugacy & Efficiency:** The Inverse-Gamma is the conjugate prior for the variance of a Normal distribution. This property allows us to analytically derive the full conditional posterior and implement an exact Gibbs Sampling step for $\sigma^2$.
 * **Performance:** Unlike the Half-Cauchy prior, which would require a Metropolis-Hastings update with tuning issues and lower acceptance rates, Gibbs sampling ensures a **100% acceptance rate** . This drastically improves the mixing and Effective Sample Size (ESS) of our MCMC chain.
 
 ### 3.3 Sampling Algorithm: Metropolis-within-Gibbs (MwG)
 
-To estimate the posterior distribution, we employ a hybrid **Metropolis-within-Gibbs** sampler. This algorithm alternates between exact Gibbs sampling for parameters with conjugate priors (**$\boldsymbol{\lambda}, \sigma^2$**) and Metropolis-Hastings (MH) steps for others (**$\mu, \nu$**).
+To estimate the posterior distribution, we employ a hybrid Metropolis-within-Gibbs sampler. This algorithm alternates between exact Gibbs sampling for parameters with conjugate priors (**$\boldsymbol{\lambda}, \sigma^2$**) and Metropolis-Hastings (MH) steps for others (**$\mu, \nu$**).
 
 Step 1: Gibbs Update for Latent Weights ($\boldsymbol{\lambda}$)
 
@@ -111,6 +126,7 @@ To ensure the validity of our MCMC results, we performed standard convergence ch
 ### 4.1 Trace Plots & Geweke test
 
 * **Analysis:** The trace plots for $\mu$, $\sigma$, and $\nu$ exhibit a stable "caterpillar" pattern with no discernible trend. This indicates that the chain has successfully converged to the stationary distribution after the burn-in period.
+  The first 10% of the chain (10,000 iterations) was discarded as the burn-in period.
 
 <div align="center">
     <img src="outputs/trace_mu.png" width="100%"> 
@@ -142,14 +158,6 @@ To ensure the validity of our MCMC results, we performed standard convergence ch
     <img src="outputs/acf_nu.png" width="100%">
 </div>
 
-### 5.3 Risk Quantification
-
-We estimated the risk metrics at the 95% confidence level (**$\alpha = 0.05$**) using the full posterior distribution. The uncertainty of these estimates is visualized in the posterior histograms.
-
-<div align="center">
-    <img src="outputs/risk_posterior.png" width="100%">
-</div>
-
 ## 5. Results & Risk Analysis
 
 ### 5.1 Posterior Estimates
@@ -159,7 +167,7 @@ We estimated the risk metrics at the 95% confidence level (**$\alpha = 0.05$**) 
 | -------------------------------- | ---------- | --------------------------- | --------- | ------------------------------------------------- |
 | **$\mu$ (Location)**           | 0.029%   | [-0.222%, 0.277%]         | 1800.0  | Daily expected return is close to zero.         |
 | **$\sigma$ (Scale)**           | 3.105%   | [2.823%, 3.398%]          | 800.6   | Captures the baseline daily volatility.         |
-| **$\nu$ (Degrees of Freedom)** | 5.759    | [3.723, 9.093]            | 558.8   | Low $\nu$ (< 10) confirms significant fat tails. |
+| **$\nu$ (Degrees of Freedom)** | 5.759    | [3.723, 9.093]            | 558.8   | Low$\nu$ (< 10) confirms significant fat tails. |
 
 ### 5.2 Metric Calculation: Analytical Approach
 
@@ -167,7 +175,7 @@ Instead of relying solely on empirical quantiles from the simulated returns, we 
 
 For a return series **$r_t \sim t_\nu(\mu, \sigma^2)$** and a significance level **$\alpha$** (e.g., 0.05), the metrics are defined as follows:
 
-1.  **Value at Risk (VaR)**
+1. **Value at Risk (VaR)**
 
 VaR represents the quantile of the loss distribution.
 
@@ -203,14 +211,14 @@ We estimated the risk metrics at the 95% confidence level (**$\alpha = 0.05$**) 
 
 **Business Interpretation:**
 
-* **VaR (-6.11%):** Under normal market conditions, there is a 95% probability that Tesla's daily loss will **not exceed 6.11%** . Conversely, we expect a loss greater than 6.11% to occur roughly once every 20 trading days.
-* **ES (-8.67%):** In the worst 5% of scenarios (i.e., when a crash occurs and the VaR threshold is breached), the **average expected loss is 8.67%** . This metric captures the "tail risk" or the severity of extreme downturns, which is significantly deeper than the VaR boundary suggests.
+* **VaR (-6.11%):** Under normal market conditions, there is a 95% probability that Tesla's daily loss will not exceed 6.11% . Conversely, we expect a loss greater than 6.11% to occur roughly once every 20 trading days.
+* **ES (-8.67%):** In the worst 5% of scenarios (i.e., when a crash occurs and the VaR threshold is breached), the average expected loss is 8.67% . This metric captures the "tail risk" or the severity of extreme downturns, which is significantly deeper than the VaR boundary suggests.
 
 ### 5.4 Upside Potential: The Symmetry of Volatility
 
 While VaR and ES focus on downside risk, the Student's t-distribution is symmetric. The estimated high volatility (**$\sigma \approx 3.10\%$**) and heavy tails (**$\nu \approx 5.76$**) imply that the risk is bilateral.
 
-* **Interpretation:** The model suggests that Tesla's stock has an **Upside Potential** (95% right-tail quantile) of approximately **+6.11%** .
+* **Interpretation:** The model suggests that Tesla's stock has an Upside Potential (95% right-tail quantile) of approximately +6.11% .
 * **Insight:** This symmetry characterizes Tesla as a typical high-volatility technology stock: investors must tolerate the significant risk of drawdown (VaR -6.11%) as the "price" for accessing equally significant potential for rapid gains. The heavy tails indicate that "surprise" rallies are just as likely as "surprise" crashes.
 
 ## 6. Conclusion
@@ -219,9 +227,9 @@ This project successfully implemented a Bayesian hierarchical Student-t model to
 
 **Key Findings:**
 
-1. **Confirmation of Heavy Tails:** The posterior degrees of freedom **$\nu \approx 5.76$** strongly rejects the Normal distribution assumption, confirming that extreme market events occur far more frequently than traditional models predict.
-2. **Quantified Risk:** We estimated the 95% **Value at Risk (VaR) at -6.11%** and **Expected Shortfall (ES) at -8.67%** . These metrics highlight a significant tail risk, where the potential average loss in extreme scenarios deepens by over 2.5% beyond the VaR threshold.
-3. **High Volatility Profile:** The baseline volatility (**$\sigma \approx 3.11\%$**) and the symmetric nature of the t-distribution characterize Tesla as a high-risk, high-reward asset with substantial upside and downside potential.
+1. **Confirmation of Heavy Tails:** The posterior degrees of freedom $\nu \approx 5.76$ strongly rejects the Normal distribution assumption, confirming that extreme market events occur far more frequently than traditional models predict.
+2. **Quantified Risk:** We estimated the 95% Value at Risk (VaR) at -6.11% and Expected Shortfall (ES) at -8.67% . These metrics highlight a significant tail risk, where the potential average loss in extreme scenarios deepens by over 2.5% beyond the VaR threshold.
+3. **High Volatility Profile:** The baseline volatility ($\sigma \approx 3.11\%$) and the symmetric nature of the t-distribution characterize Tesla as a high-risk, high-reward asset with substantial upside and downside potential.
 
 ---
 
@@ -507,7 +515,7 @@ def calculate_var_es(mu_samps, sigma_samps, nu_samps, alpha=0.05):
             pdf_q = stats.t.pdf(q_std, df=nu)
             es_std_term = - ((nu + q_std**2) / (nu - 1)) * (pdf_q / alpha)
             es_samps[i] = mu + sig * es_std_term
-    
+  
     return var_samps, es_samps
 
 
